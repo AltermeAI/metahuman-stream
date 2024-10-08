@@ -8,6 +8,7 @@ import cv2
 import glob
 import pickle
 import copy
+import resampy
 
 import queue
 from queue import Queue
@@ -18,7 +19,7 @@ import soundfile as sf
 import av
 from fractions import Fraction
 
-from ttsreal import EdgeTTS,VoitsTTS,XTTS
+from ttsreal import EdgeTTS,VoitsTTS,XTTS,CosyVoiceTTS
 
 from tqdm import tqdm
 def read_imgs(img_list):
@@ -41,7 +42,11 @@ class BaseReal:
             self.tts = VoitsTTS(opt,self)
         elif opt.tts == "xtts":
             self.tts = XTTS(opt,self)
+        elif opt.tts == "cosyvoice":
+            self.tts = CosyVoiceTTS(opt,self)
         
+        self.speaking = False
+
         self.recording = False
         self.recordq_video = Queue()
         self.recordq_audio = Queue()
@@ -53,6 +58,45 @@ class BaseReal:
         self.custom_index = {}
         self.custom_opt = {}
         self.__loadcustom()
+
+    def put_msg_txt(self,msg):
+        self.tts.put_msg_txt(msg)
+    
+    def put_audio_frame(self,audio_chunk): #16khz 20ms pcm
+        self.asr.put_audio_frame(audio_chunk)
+
+    def put_audio_file(self,filebyte): 
+        input_stream = BytesIO(filebyte)
+        stream = self.__create_bytes_stream(input_stream)
+        streamlen = stream.shape[0]
+        idx=0
+        while streamlen >= self.chunk:  #and self.state==State.RUNNING
+            self.put_audio_frame(stream[idx:idx+self.chunk])
+            streamlen -= self.chunk
+            idx += self.chunk
+    
+    def __create_bytes_stream(self,byte_stream):
+        #byte_stream=BytesIO(buffer)
+        stream, sample_rate = sf.read(byte_stream) # [T*sample_rate,] float64
+        print(f'[INFO]put audio stream {sample_rate}: {stream.shape}')
+        stream = stream.astype(np.float32)
+
+        if stream.ndim > 1:
+            print(f'[WARN] audio has {stream.shape[1]} channels, only use the first.')
+            stream = stream[:, 0]
+    
+        if sample_rate != self.sample_rate and stream.shape[0]>0:
+            print(f'[WARN] audio sample rate is {sample_rate}, resampling into {self.sample_rate}.')
+            stream = resampy.resample(x=stream, sr_orig=sample_rate, sr_new=self.sample_rate)
+
+        return stream
+
+    def pause_talk(self):
+        self.tts.pause_talk()
+        self.asr.pause_talk()
+
+    def is_speaking(self)->bool:
+        return self.speaking
     
     def __loadcustom(self):
         for item in self.opt.customopt:
@@ -72,14 +116,14 @@ class BaseReal:
         for key in self.custom_index:
             self.custom_index[key]=0
 
-    def start_recording(self):
+    def start_recording(self,path):
         """开始录制视频"""
         if self.recording:
             return
         self.recording = True
         self.recordq_video.queue.clear()
         self.recordq_audio.queue.clear()
-        self.container = av.open("data/record_lasted.mp4", mode="w")
+        self.container = av.open(path, mode="w")
     
         process_thread = Thread(target=self.record_frame, args=())
         process_thread.start()
@@ -115,6 +159,10 @@ class BaseReal:
             except Exception as e:
                 print(e)
                 #break
+        for packet in videostream.encode(None):
+            self.container.mux(packet)
+        for packet in audiostream.encode(None):
+            self.container.mux(packet)
         self.container.close()
         self.recordq_video.queue.clear()
         self.recordq_audio.queue.clear()

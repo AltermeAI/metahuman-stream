@@ -17,6 +17,8 @@ import asyncio
 from av import AudioFrame, VideoFrame
 from basereal import BaseReal
 
+#from imgcache import ImgCache
+
 from tqdm import tqdm
 def read_imgs(img_list):
     frames = []
@@ -60,6 +62,7 @@ class NeRFReal(BaseReal):
             input_img_list = sorted(input_img_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
             #print('input_img_list:',input_img_list)
             self.fullbody_list_cycle = read_imgs(input_img_list[:frame_total_num])
+            #self.imagecache = ImgCache(frame_total_num,self.opt.fullbody_img,1000)
 
         #self.render_buffer = np.zeros((self.W, self.H, 3), dtype=np.float32)
         #self.need_update = True # camera moved, should reset accumulation
@@ -123,17 +126,7 @@ class NeRFReal(BaseReal):
 
     def __exit__(self, exc_type, exc_value, traceback):
         if self.opt.asr:
-            self.asr.stop()
-
-    def put_msg_txt(self,msg):
-        self.tts.put_msg_txt(msg)
-
-    def put_audio_frame(self,audio_chunk): #16khz 20ms pcm
-        self.asr.put_audio_frame(audio_chunk)
-
-    def pause_talk(self):
-        self.tts.pause_talk()
-        self.asr.pause_talk()   
+            self.asr.stop()  
     
 
     # def mirror_index(self, index):
@@ -197,6 +190,11 @@ class NeRFReal(BaseReal):
         #         #     time.sleep(0.1)
         #         asyncio.run_coroutine_threadsafe(audio_track._queue.put(new_frame), loop)  
         #t = time.time()
+        if audiotype1!=0 and audiotype2!=0: #全为静音数据
+            self.speaking = False
+        else:
+            self.speaking = True
+            
         if audiotype1!=0 and audiotype2!=0 and self.custom_index.get(audiotype1) is not None: #不为推理视频并且有自定义视频
             mirindex = self.mirror_index(len(self.custom_img_cycle[audiotype1]),self.custom_index[audiotype1])
             #imgindex  = self.mirror_index(self.customimg_index)
@@ -225,7 +223,8 @@ class NeRFReal(BaseReal):
                 #print("frame index:",data['index'])
                 #image_fullbody = cv2.imread(os.path.join(self.opt.fullbody_img, str(data['index'][0])+'.jpg'))
                 image_fullbody = self.fullbody_list_cycle[data['index'][0]]
-                image_fullbody = cv2.cvtColor(image_fullbody, cv2.COLOR_BGR2RGB)
+                #image_fullbody = self.imagecache.get_img(data['index'][0])
+                image_fullbody = cv2.cvtColor(image_fullbody, cv2.COLOR_BGR2RGB)                
                 start_x = self.opt.fullbody_offset_x  # 合并后小图片的起始x坐标
                 start_y = self.opt.fullbody_offset_y  # 合并后小图片的起始y坐标
                 image_fullbody[start_y:start_y+image.shape[0], start_x:start_x+image.shape[1]] = image

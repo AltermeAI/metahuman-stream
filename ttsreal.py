@@ -37,7 +37,8 @@ class BaseTTS:
         self.state = State.PAUSE
 
     def put_msg_txt(self,msg): 
-        self.msgqueue.put(msg)
+        if len(msg)>0:
+            self.msgqueue.put(msg)
 
     def render(self,quit_event):
         process_thread = Thread(target=self.process_tts, args=(quit_event,))
@@ -65,7 +66,10 @@ class EdgeTTS(BaseTTS):
         t = time.time()
         asyncio.new_event_loop().run_until_complete(self.__main(voicename,text))
         print(f'-------edge tts time:{time.time()-t:.4f}s')
-
+        if self.input_stream.getbuffer().nbytes<=0: #edgetts err
+            print('edgetts err!!!!!')
+            return
+        
         self.input_stream.seek(0)
         stream = self.__create_bytes_stream(self.input_stream)
         streamlen = stream.shape[0]
@@ -96,19 +100,22 @@ class EdgeTTS(BaseTTS):
         return stream
     
     async def __main(self,voicename: str, text: str):
-        communicate = edge_tts.Communicate(text, voicename)
+        try:
+            communicate = edge_tts.Communicate(text, voicename)
 
-        #with open(OUTPUT_FILE, "wb") as file:
-        first = True
-        async for chunk in communicate.stream():
-            if first:
-                first = False
-            if chunk["type"] == "audio" and self.state==State.RUNNING:
-                #self.push_audio(chunk["data"])
-                self.input_stream.write(chunk["data"])
-                #file.write(chunk["data"])
-            elif chunk["type"] == "WordBoundary":
-                pass
+            #with open(OUTPUT_FILE, "wb") as file:
+            first = True
+            async for chunk in communicate.stream():
+                if first:
+                    first = False
+                if chunk["type"] == "audio" and self.state==State.RUNNING:
+                    #self.push_audio(chunk["data"])
+                    self.input_stream.write(chunk["data"])
+                    #file.write(chunk["data"])
+                elif chunk["type"] == "WordBoundary":
+                    pass
+        except Exception as e:
+            print(e)
 
 ###########################################################################################
 class VoitsTTS(BaseTTS):
@@ -140,34 +147,93 @@ class VoitsTTS(BaseTTS):
         # req["emotion"] = emotion
         # #req["stream_chunk_size"] = stream_chunk_size  # you can reduce it to get faster response, but degrade quality
         # req["streaming_mode"] = True
-        res = requests.post(
-            f"{server_url}/tts",
-            json=req,
-            stream=True,
-        )
-        end = time.perf_counter()
-        print(f"gpt_sovits Time to make POST: {end-start}s")
+        try:
+            res = requests.post(
+                f"{server_url}/tts",
+                json=req,
+                stream=True,
+            )
+            end = time.perf_counter()
+            print(f"gpt_sovits Time to make POST: {end-start}s")
 
-        if res.status_code != 200:
-            print("Error:", res.text)
-            return
-            
-        first = True
-        for chunk in res.iter_content(chunk_size=32000): # 1280 32K*20ms*2
-            if first:
-                end = time.perf_counter()
-                print(f"gpt_sovits Time to first chunk: {end-start}s")
-                first = False
-            if chunk and self.state==State.RUNNING:
-                yield chunk
-
-        print("gpt_sovits response.elapsed:", res.elapsed)
+            if res.status_code != 200:
+                print("Error:", res.text)
+                return
+                
+            first = True
+        
+            for chunk in res.iter_content(chunk_size=12800): # 1280 32K*20ms*2
+                if first:
+                    end = time.perf_counter()
+                    print(f"gpt_sovits Time to first chunk: {end-start}s")
+                    first = False
+                if chunk and self.state==State.RUNNING:
+                    yield chunk
+            #print("gpt_sovits response.elapsed:", res.elapsed)
+        except Exception as e:
+            print(e)
 
     def stream_tts(self,audio_stream):
         for chunk in audio_stream:
             if chunk is not None and len(chunk)>0:          
                 stream = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32767
                 stream = resampy.resample(x=stream, sr_orig=32000, sr_new=self.sample_rate)
+                #byte_stream=BytesIO(buffer)
+                #stream = self.__create_bytes_stream(byte_stream)
+                streamlen = stream.shape[0]
+                idx=0
+                while streamlen >= self.chunk:
+                    self.parent.put_audio_frame(stream[idx:idx+self.chunk])
+                    streamlen -= self.chunk
+                    idx += self.chunk 
+
+###########################################################################################
+class CosyVoiceTTS(BaseTTS):
+    def txt_to_audio(self,msg): 
+        self.stream_tts(
+            self.cosy_voice(
+                msg,
+                self.opt.REF_FILE,  
+                self.opt.REF_TEXT,
+                "zh", #en args.language,
+                self.opt.TTS_SERVER, #"http://127.0.0.1:5000", #args.server_url,
+            )
+        )
+
+    def cosy_voice(self, text, reffile, reftext,language, server_url) -> Iterator[bytes]:
+        start = time.perf_counter()
+        payload = {
+            'tts_text': text,
+            'prompt_text': reftext
+        }
+        try:
+            files = [('prompt_wav', ('prompt_wav', open(reffile, 'rb'), 'application/octet-stream'))]
+            res = requests.request("GET", f"{server_url}/inference_zero_shot", data=payload, files=files, stream=True)
+            
+            end = time.perf_counter()
+            print(f"cosy_voice Time to make POST: {end-start}s")
+
+            if res.status_code != 200:
+                print("Error:", res.text)
+                return
+                
+            first = True
+        
+            for chunk in res.iter_content(chunk_size=8820): # 882 22.05K*20ms*2
+                if first:
+                    end = time.perf_counter()
+                    print(f"cosy_voice Time to first chunk: {end-start}s")
+                    first = False
+                if chunk and self.state==State.RUNNING:
+                    yield chunk
+        except Exception as e:
+            print(e)
+
+    def stream_tts(self,audio_stream):
+        for chunk in audio_stream:
+            if chunk is not None and len(chunk)>0:          
+                stream = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32767
+                stream = resampy.resample(x=stream, sr_orig=22050, sr_new=self.sample_rate)
                 #byte_stream=BytesIO(buffer)
                 #stream = self.__create_bytes_stream(byte_stream)
                 streamlen = stream.shape[0]
@@ -204,28 +270,30 @@ class XTTS(BaseTTS):
         speaker["text"] = text
         speaker["language"] = language
         speaker["stream_chunk_size"] = stream_chunk_size  # you can reduce it to get faster response, but degrade quality
-        res = requests.post(
-            f"{server_url}/tts_stream",
-            json=speaker,
-            stream=True,
-        )
-        end = time.perf_counter()
-        print(f"xtts Time to make POST: {end-start}s")
+        try:
+            res = requests.post(
+                f"{server_url}/tts_stream",
+                json=speaker,
+                stream=True,
+            )
+            end = time.perf_counter()
+            print(f"xtts Time to make POST: {end-start}s")
 
-        if res.status_code != 200:
-            print("Error:", res.text)
-            return
+            if res.status_code != 200:
+                print("Error:", res.text)
+                return
 
-        first = True
-        for chunk in res.iter_content(chunk_size=960): #24K*20ms*2
-            if first:
-                end = time.perf_counter()
-                print(f"xtts Time to first chunk: {end-start}s")
-                first = False
-            if chunk:
-                yield chunk
-
-        print("xtts response.elapsed:", res.elapsed)
+            first = True
+        
+            for chunk in res.iter_content(chunk_size=9600): #24K*20ms*2
+                if first:
+                    end = time.perf_counter()
+                    print(f"xtts Time to first chunk: {end-start}s")
+                    first = False
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            print(e)
     
     def stream_tts(self,audio_stream):
         for chunk in audio_stream:
