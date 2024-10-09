@@ -140,7 +140,7 @@ async def offer(request):
             sessionid = index
             break
     if sessionid>=len(nerfreals):
-        print('reach max session')
+        print(f'reach max session {len(nerfreals)},{sessionid}')
         return -1
     statreals[sessionid] = 1
     
