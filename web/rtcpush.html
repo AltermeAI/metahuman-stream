@@ -45,14 +45,14 @@
 </div>
 
 <script src="srs.sdk.js"></script>
-<script type="text/javascript" src="http://cdn.sockjs.org/sockjs-0.3.4.js"></script>
+<script type="text/javascript" src="https://get.cdnpkg.com/kd-shim-sockjs-client/0.3.4/sockjs-0.3.4.js"></script>
 <script type="text/javascript" src="https://ajax.aspnetcdn.com/ajax/jquery/jquery-2.1.1.min.js"></script>
 </body>
 <script type="text/javascript" charset="utf-8">
 
 	$(document).ready(function() {
 	  var host = window.location.hostname
-	  var ws = new WebSocket("ws://"+host+":8000/humanecho");
+	  var ws = new WebSocket("wss://"+host+":8000/humanecho");
 	  //document.getElementsByTagName("video")[0].setAttribute("src", aa["video"]);
 	  ws.onopen = function() {
 		console.log('Connected');
@@ -97,7 +97,7 @@
 
         var host = window.location.hostname
         // For example: webrtc://r.ossrs.net/live/livestream
-        var url = "http://"+host+":1985/rtc/v1/whep/?app=live&stream=livestream"
+        var url = "https://k90wrf38i4det9-1985.proxy.runpod.net/rtc/v1/whep/?app=live&stream=livestream"
         sdk.play(url).then(function(session){
             //$('#sessionid').html(session.sessionid);
             //$('#simulator-drop').attr('href', session.simulator + '?drop=1&username=' + session.sessionid);
