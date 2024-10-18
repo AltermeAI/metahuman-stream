@@ -281,13 +281,15 @@ async def post(url,data):
         print(f'Error: {e}')
 
 async def run(push_url):
+    print(f"Initiating WebRTC connection to push URL: {push_url}")
     pc = RTCPeerConnection()
     pcs.add(pc)
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        print("Connection state is %s" % pc.connectionState)
+        print(f"Connection state changed to: {pc.connectionState}")
         if pc.connectionState == "failed":
+            print("Connection failed. Closing peer connection.")
             await pc.close()
             pcs.discard(pc)
 
@@ -295,9 +297,20 @@ async def run(push_url):
     audio_sender = pc.addTrack(player.audio)
     video_sender = pc.addTrack(player.video)
 
-    await pc.setLocalDescription(await pc.createOffer())
-    answer = await post(push_url,pc.localDescription.sdp)
-    await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
+    print("Creating local offer...")
+    offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+    print(f"Local offer SDP:\n{pc.localDescription.sdp}")
+
+    print(f"Sending offer to {push_url}")
+    answer = await post(push_url, pc.localDescription.sdp)
+    print(f"Received answer:\n{answer}")
+
+    print("Setting remote description...")
+    await pc.setRemoteDescription(RTCSessionDescription(sdp=answer, type='answer'))
+    print("Remote description set successfully.")
+
+    print("WebRTC connection established.")
 ##########################################
 # os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
 # os.environ['MULTIPROCESSING_METHOD'] = 'forkserver'                                                    
