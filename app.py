@@ -19,6 +19,7 @@ import aiohttp_cors
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.rtcrtpsender import RTCRtpSender
 from webrtc import HumanPlayer
+from itertools import count
 
 import argparse
 
@@ -31,8 +32,27 @@ app = Flask(__name__)
 sockets = Sockets(app)
 nerfreals = []
 statreals = [] 
+pingreals = []
+session_id_counter = count()
 
-    
+# Add this constant at the top of your file
+PING_TIMEOUT = 30  # 30 seconds
+
+# Add this function to your file
+async def check_timeout():
+    while True:
+        current_time = time.time()
+        for index, last_ping_time in enumerate(pingreals):
+            if last_ping_time and (current_time - last_ping_time) > PING_TIMEOUT:
+                print(f"nerf {index} timed out. Releasing connection.")
+                if statreals[index] != 0:
+                    pc = statreals[index]
+                    await pc.close()
+                    pcs.discard(pc)
+                    statreals[index] = 0
+                    pingreals[index] = None  # Reset the ping time
+        await asyncio.sleep(5)  # Check every 5 seconds
+
 @sockets.route('/humanecho')
 def echo_socket(ws):
     # 获取WebSocket对象
@@ -181,7 +201,83 @@ async def offer(request):
             {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type, "sessionid":sessionid}
         ),
     )
+async def rtcpush_offer(request):
+    params = await request.json()
+    offer_type = params['offer_type']
 
+    if offer_type == 'connect':
+        nerf_index = len(nerfreals)
+        for index,value in enumerate(statreals):
+            if value == 0:
+                nerf_index = index
+                break
+        if nerf_index>=len(nerfreals):
+            print(f'reach max session {len(nerfreals)},{nerf_index}')
+            return web.Response(
+                content_type="application/json",
+                text=json.dumps(
+                    {"code": -1, "msg": "run out of session"}
+                ),
+            )
+        statreals[nerf_index] = 1
+        session_id = next(session_id_counter)
+        pc=run(f"http://localhost:1985/rtc/v1/whip/?app=fanswifi&stream=stream_{session_id}&eip=192.168.86.2:8000",nerf_index)
+        statreals[nerf_index] = pc
+        pingreals[nerf_index] = time.time()  # Set initial ping time
+        return web.Response(
+                content_type="application/json",
+                text=json.dumps(
+                    {"code": 0, "data": "connect ok", "session_id": session_id, "nerf_index": nerf_index}
+            ),
+        )
+    elif offer_type == 'disconnect':
+        session_id = params.get('session_id', 0)
+        nerf_index = params.get('nerf_index', 0)
+        if 0 <= nerf_index < len(nerfreals):
+            pc = statreals[nerf_index]
+            await pc.close()
+            pcs.discard(pc)
+            statreals[nerf_index] = 0
+
+            return web.Response(
+                content_type="application/json",
+                text=json.dumps(
+                    {"code": 0, "data": "disconnect ok", "session_id": session_id, "nerf_index": nerf_index}
+                ),
+            )
+        else:
+            return web.Response(
+                content_type="application/json",
+                text=json.dumps(
+                    {"code": -1, "msg": "Invalid session ID"}
+                ),
+            )
+    elif offer_type == 'ping':
+        session_id = params.get('session_id', 0)
+        nerf_index = params.get('nerf_index', 0)
+        if 0 <= nerf_index < len(nerfreals):
+            pingreals[nerf_index] = time.time()  # Update ping time
+            return web.Response(
+                content_type="application/json",
+                text=json.dumps(
+                    {"code": 0, "data": "pong", "session_id": session_id, "nerf_index": nerf_index}
+                ),
+            )
+        else:
+            return web.Response(
+                content_type="application/json",
+            text=json.dumps(
+                    {"code": -1, "msg": "Invalid nerf index"}
+                ),
+            )
+    else:
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps(
+                {"code": -1, "msg": "Invalid offer type"}
+            ),
+        )
+    
 async def human(request):
     params = await request.json()
 
@@ -280,7 +376,7 @@ async def post(url,data):
     except aiohttp.ClientError as e:
         print(f'Error: {e}')
 
-async def run(push_url):
+async def run(push_url,nerf_index) :
     print(f"Initiating WebRTC connection to push URL: {push_url}")
     pc = RTCPeerConnection()
     pcs.add(pc)
@@ -293,7 +389,7 @@ async def run(push_url):
             await pc.close()
             pcs.discard(pc)
 
-    player = HumanPlayer(nerfreals[0])
+    player = HumanPlayer(nerfreals[nerf_index])
     audio_sender = pc.addTrack(player.audio)
     video_sender = pc.addTrack(player.video)
 
@@ -311,6 +407,7 @@ async def run(push_url):
     print("Remote description set successfully.")
 
     print("WebRTC connection established.")
+    return pc
 ##########################################
 # os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
 # os.environ['MULTIPROCESSING_METHOD'] = 'forkserver'                                                    
@@ -525,6 +622,7 @@ if __name__ == '__main__':
     
     for _ in range(opt.max_session):
         statreals.append(0)
+        pingreals.append(None)
 
     if opt.transport=='rtmp':
         thread_quit = Event()
@@ -541,6 +639,7 @@ if __name__ == '__main__':
     appasync.router.add_post("/record", record)
     appasync.router.add_post("/is_speaking", is_speaking)
     appasync.router.add_static('/',path='web')
+    appasync.router.add_post("/rtcpush_offer", rtcpush_offer)
 
     # Configure default CORS settings.
     cors = aiohttp_cors.setup(appasync, defaults={
@@ -567,7 +666,7 @@ if __name__ == '__main__':
         site = web.TCPSite(runner, '0.0.0.0', opt.listenport)
         loop.run_until_complete(site.start())
         if opt.transport=='rtcpush':
-            loop.run_until_complete(run(opt.push_url))
+            loop.create_task(check_timeout())  # Start the timeout checker
         loop.run_forever()    
     #Thread(target=run_server, args=(web.AppRunner(appasync),)).start()
     run_server(web.AppRunner(appasync))
