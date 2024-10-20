@@ -43,14 +43,13 @@ async def check_timeout():
     while True:
         current_time = time.time()
         for index, last_ping_time in enumerate(pingreals):
-            if last_ping_time and (current_time - last_ping_time) > PING_TIMEOUT:
+            if statreals[index] != 0 and last_ping_time and (current_time - last_ping_time) > PING_TIMEOUT:
                 print(f"nerf {index} timed out. Releasing connection.")
-                if statreals[index] != 0:
-                    pc = statreals[index]
-                    await pc.close()
-                    pcs.discard(pc)
-                    statreals[index] = 0
-                    pingreals[index] = None  # Reset the ping time
+                pc = statreals[index]
+                await pc.close()
+                pcs.discard(pc)
+                statreals[index] = 0
+                pingreals[index] = None  # Reset the ping time
         await asyncio.sleep(5)  # Check every 5 seconds
 
 @sockets.route('/humanecho')
@@ -229,7 +228,6 @@ async def rtcpush_offer(request):
                         {"code": -1, "msg": "run out of session"}
                     ),
                 )
-            statreals[nerf_index] = 1
             session_id = next(session_id_counter)
             pc = await run(f"http://localhost:1985/rtc/v1/whip/?app=fanswifi&stream=stream_{session_id}&eip=192.168.86.2:8000", nerf_index)
             statreals[nerf_index] = pc
