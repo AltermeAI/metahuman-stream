@@ -241,8 +241,8 @@ async def rtcpush_offer(request):
                 ),
             )
         elif offer_type == 'disconnect':
-            session_id = params.get('session_id', 0)
-            nerf_index = params.get('nerf_index', 0)
+            session_id = params.get('session_id', -1)
+            nerf_index = params.get('nerf_index', -1)
             if 0 <= nerf_index < len(nerfreals):
                 pc = statreals[nerf_index]
                 await pc.close()
@@ -263,8 +263,8 @@ async def rtcpush_offer(request):
                     ),
                 )
         elif offer_type == 'ping':
-            session_id = params.get('session_id', 0)
-            nerf_index = params.get('nerf_index', 0)
+            session_id = params.get('session_id', -1)
+            nerf_index = params.get('nerf_index', -1)
             if 0 <= nerf_index < len(nerfreals):
                 pingreals[nerf_index] = time.time()  # Update ping time
                 return web.Response(
