@@ -38,6 +38,9 @@ session_id_counter = count()
 # Add this constant at the top of your file
 PING_TIMEOUT = 30  # 30 seconds
 
+# Add this at the top of your file with other global variables
+connect_lock = asyncio.Lock()
+
 # Add this function to your file
 async def check_timeout():
     while True:
@@ -215,23 +218,33 @@ async def rtcpush_offer(request):
             )
 
         if offer_type == 'connect':
-            nerf_index = len(nerfreals)
-            for index, value in enumerate(statreals):
-                if value == 0:
-                    nerf_index = index
-                    break
-            if nerf_index >= len(nerfreals):
-                print(f'reach max session {len(nerfreals)},{nerf_index}')
-                return web.Response(
-                    content_type="application/json",
-                    text=json.dumps(
-                        {"code": -1, "msg": "run out of session"}
-                    ),
-                )
+            async with connect_lock:
+                nerf_index = len(nerfreals)
+                for index, value in enumerate(statreals):
+                    if value == 0:
+                        nerf_index = index
+                        break
+                if nerf_index >= len(nerfreals):
+                    print(f'reach max session {len(nerfreals)},{nerf_index}')
+                    return web.Response(
+                        content_type="application/json",
+                        text=json.dumps(
+                            {"code": -1, "msg": "run out of session"}
+                        ),
+                    )
+                # Mark this index as in use before releasing the lock
+                statreals[nerf_index] = 1
+
             session_id = next(session_id_counter)
-            pc = await run(f"http://localhost:1985/rtc/v1/whip/?app=fanswifi&stream=stream_{session_id}&eip=192.168.86.2:8000", nerf_index)
-            statreals[nerf_index] = pc
-            pingreals[nerf_index] = time.time()  # Set initial ping time
+            try:
+                pc = await run(f"http://localhost:1985/rtc/v1/whip/?app=fanswifi&stream=stream_{session_id}&eip=192.168.86.2:8000", nerf_index)
+                statreals[nerf_index] = pc
+                pingreals[nerf_index] = time.time()  # Set initial ping time
+            except Exception as e:
+                # If connection fails, release the nerf_index
+                statreals[nerf_index] = 0
+                raise e
+
             return web.Response(
                 content_type="application/json",
                 text=json.dumps(
@@ -701,3 +714,4 @@ if __name__ == '__main__':
     # server.serve_forever()
     
     
+
