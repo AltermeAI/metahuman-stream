@@ -202,79 +202,103 @@ async def offer(request):
         ),
     )
 async def rtcpush_offer(request):
-    params = await request.json()
-    offer_type = params['offer_type']
+    try:
+        params = await request.json()
+        print(params)
+        offer_type = params.get('offer_type')
 
-    if offer_type == 'connect':
-        nerf_index = len(nerfreals)
-        for index,value in enumerate(statreals):
-            if value == 0:
-                nerf_index = index
-                break
-        if nerf_index>=len(nerfreals):
-            print(f'reach max session {len(nerfreals)},{nerf_index}')
+        if offer_type is None:
             return web.Response(
                 content_type="application/json",
                 text=json.dumps(
-                    {"code": -1, "msg": "run out of session"}
+                    {"code": -1, "msg": "Missing offer_type in request"}
                 ),
             )
-        statreals[nerf_index] = 1
-        session_id = next(session_id_counter)
-        pc=run(f"http://localhost:1985/rtc/v1/whip/?app=fanswifi&stream=stream_{session_id}&eip=192.168.86.2:8000",nerf_index)
-        statreals[nerf_index] = pc
-        pingreals[nerf_index] = time.time()  # Set initial ping time
-        return web.Response(
+
+        if offer_type == 'connect':
+            nerf_index = len(nerfreals)
+            for index, value in enumerate(statreals):
+                if value == 0:
+                    nerf_index = index
+                    break
+            if nerf_index >= len(nerfreals):
+                print(f'reach max session {len(nerfreals)},{nerf_index}')
+                return web.Response(
+                    content_type="application/json",
+                    text=json.dumps(
+                        {"code": -1, "msg": "run out of session"}
+                    ),
+                )
+            statreals[nerf_index] = 1
+            session_id = next(session_id_counter)
+            pc = await run(f"http://localhost:1985/rtc/v1/whip/?app=fanswifi&stream=stream_{session_id}&eip=192.168.86.2:8000", nerf_index)
+            statreals[nerf_index] = pc
+            pingreals[nerf_index] = time.time()  # Set initial ping time
+            return web.Response(
                 content_type="application/json",
                 text=json.dumps(
                     {"code": 0, "data": "connect ok", "session_id": session_id, "nerf_index": nerf_index}
-            ),
-        )
-    elif offer_type == 'disconnect':
-        session_id = params.get('session_id', 0)
-        nerf_index = params.get('nerf_index', 0)
-        if 0 <= nerf_index < len(nerfreals):
-            pc = statreals[nerf_index]
-            await pc.close()
-            pcs.discard(pc)
-            statreals[nerf_index] = 0
+                ),
+            )
+        elif offer_type == 'disconnect':
+            session_id = params.get('session_id', 0)
+            nerf_index = params.get('nerf_index', 0)
+            if 0 <= nerf_index < len(nerfreals):
+                pc = statreals[nerf_index]
+                await pc.close()
+                pcs.discard(pc)
+                statreals[nerf_index] = 0
 
-            return web.Response(
-                content_type="application/json",
-                text=json.dumps(
-                    {"code": 0, "data": "disconnect ok", "session_id": session_id, "nerf_index": nerf_index}
-                ),
-            )
+                return web.Response(
+                    content_type="application/json",
+                    text=json.dumps(
+                        {"code": 0, "data": "disconnect ok", "session_id": session_id, "nerf_index": nerf_index}
+                    ),
+                )
+            else:
+                return web.Response(
+                    content_type="application/json",
+                    text=json.dumps(
+                        {"code": -1, "msg": "Invalid session ID"}
+                    ),
+                )
+        elif offer_type == 'ping':
+            session_id = params.get('session_id', 0)
+            nerf_index = params.get('nerf_index', 0)
+            if 0 <= nerf_index < len(nerfreals):
+                pingreals[nerf_index] = time.time()  # Update ping time
+                return web.Response(
+                    content_type="application/json",
+                    text=json.dumps(
+                        {"code": 0, "data": "pong", "session_id": session_id, "nerf_index": nerf_index}
+                    ),
+                )
+            else:
+                return web.Response(
+                    content_type="application/json",
+                    text=json.dumps(
+                        {"code": -1, "msg": "Invalid nerf index"}
+                    ),
+                )
         else:
             return web.Response(
                 content_type="application/json",
                 text=json.dumps(
-                    {"code": -1, "msg": "Invalid session ID"}
+                    {"code": -1, "msg": "Invalid offer type"}
                 ),
             )
-    elif offer_type == 'ping':
-        session_id = params.get('session_id', 0)
-        nerf_index = params.get('nerf_index', 0)
-        if 0 <= nerf_index < len(nerfreals):
-            pingreals[nerf_index] = time.time()  # Update ping time
-            return web.Response(
-                content_type="application/json",
-                text=json.dumps(
-                    {"code": 0, "data": "pong", "session_id": session_id, "nerf_index": nerf_index}
-                ),
-            )
-        else:
-            return web.Response(
-                content_type="application/json",
-            text=json.dumps(
-                    {"code": -1, "msg": "Invalid nerf index"}
-                ),
-            )
-    else:
+    except json.JSONDecodeError:
         return web.Response(
             content_type="application/json",
             text=json.dumps(
-                {"code": -1, "msg": "Invalid offer type"}
+                {"code": -1, "msg": "Invalid JSON in request body"}
+            ),
+        )
+    except Exception as e:
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps(
+                {"code": -1, "msg": f"An error occurred: {str(e)}"}
             ),
         )
     
